@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>SCAD to STL</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #1e2128; --line: #2c313b; --text: #e6e8ec;
+    --dim: #8b93a1; --accent: #f5b301; --accent-ink: #1a1400; --err: #ff6b6b; --warn: #ffb454;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, Roboto, sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header .grow { flex: 1; }
+  button, select {
+    font: inherit; color: var(--text); background: #2a2f39; border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; min-height: 40px;
+  }
+  select { max-width: 120px; padding: 8px 6px; }
+  button:active { filter: brightness(1.25); }
+  button:disabled { opacity: .4; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+  #bar { display: flex; gap: 8px; padding: 8px 10px; align-items: center; }
+  #bar button { flex: 0 0 auto; }
+  #status { flex: 1; min-width: 0; color: var(--dim); font-size: 13px; text-align: right;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status.err { color: var(--err); }
+  #code {
+    flex: 1 1 0; min-height: 80px; width: 100%; resize: none; border: 0; outline: 0;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: #111317; color: #e9edf3; padding: 10px;
+    font: 14px/1.45 ui-monospace, "Roboto Mono", Menlo, Consolas, monospace;
+    tab-size: 2; white-space: pre; overflow: auto;
+  }
+  #out { flex: 0 0 40%; display: flex; flex-direction: column; min-height: 0; }
+  #tabs { display: flex; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #tabs button { flex: 1; border: 0; border-radius: 0; background: none; color: var(--dim);
+                 border-bottom: 2px solid transparent; min-height: 36px; padding: 6px; }
+  #tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+  #panes { flex: 1; position: relative; min-height: 0; }
+  #panes > * { position: absolute; inset: 0; }
+  #view { width: 100%; height: 100%; display: block; touch-action: none; background: #0d0f12; }
+  #hint { display: flex; align-items: center; justify-content: center; color: var(--dim);
+          pointer-events: none; text-align: center; padding: 16px; }
+  #log { margin: 0; padding: 10px; overflow: auto; font: 12px/1.45 ui-monospace, monospace;
+         white-space: pre-wrap; word-break: break-word; color: #b9c0cc; background: #0d0f12; }
+  #log .e { color: var(--err); } #log .w { color: var(--warn); }
+  .hidden { display: none !important; }
+  /* Keyboard open: give the editor the whole screen. */
+  @media (max-height: 460px) { #out { display: none; } }
+</style>
+</head>
+<body>
+  <header>
+    <h1>SCAD → STL</h1>
+    <span class="grow"></span>
+    <select id="examples" aria-label="Examples">
+      <option value="">Examples</option>
+    </select>
+    <button id="open">Open</button>
+  </header>
+  <div id="bar">
+    <button id="render" class="primary">Render</button>
+    <button id="cancel" class="hidden">Cancel</button>
+    <button id="save" disabled>Save STL</button>
+    <span id="status">Loading engine…</span>
+  </div>
+  <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"
+            aria-label="OpenSCAD code"></textarea>
+  <section id="out">
+    <div id="tabs">
+      <button id="tabPreview" class="on">Preview</button>
+      <button id="tabLog">Log</button>
+    </div>
+    <div id="panes">
+      <canvas id="view"></canvas>
+      <div id="hint">Tap Render to build the model.<br>Drag to rotate, pinch to zoom.</div>
+      <pre id="log" class="hidden"></pre>
+    </div>
+  </section>
+  <input id="file" type="file" accept=".scad,text/plain" class="hidden">
+  <script src="viewer.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
