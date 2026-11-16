@@ -1,9 +1,11 @@
 package io.github.scad2stl;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.util.Base64;
@@ -14,6 +16,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedOutputStream;
@@ -26,12 +29,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.HashMap;
+import java.util.List;
 
 /**
  * Thin shell around a WebView. The UI and the OpenSCAD engine (WebAssembly) live in
- * assets/www and are served from a private https origin, fully offline. Java only does
- * what the page cannot: showing Android's file pickers and writing the STL to disk.
+ * assets/www and are served from a private https origin. Java only does what the page
+ * cannot: Android's file pickers, writing files, and talking to a printer on the local
+ * network (see BambuLink).
  */
 public class MainActivity extends Activity {
 
@@ -42,16 +48,16 @@ public class MainActivity extends Activity {
     private static final int MAX_SCAD_BYTES = 4 * 1024 * 1024;
 
     private WebView web;
-    private File stlFile;          // rendered STL waiting to be saved
-    private OutputStream stlOut;   // open while the page is sending chunks
-    private String stlName = "model.stl";
+    private File dataFile;         // bytes handed over by the page, waiting to be saved or sent
+    private OutputStream dataOut;  // open while the page is sending chunks
+    private String dataName = "model.stl";
     private boolean pageReady;     // true once index.html has loaded
     private Uri pendingOpen;       // .scad file handed to us before the page was ready
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        stlFile = new File(getCacheDir(), "render.stl");
+        dataFile = new File(getCacheDir(), "buffer.bin");
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -89,7 +95,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        closeQuietly(stlOut);
+        closeQuietly(dataOut);
         web.destroy();
         super.onDestroy();
     }
@@ -100,6 +106,10 @@ public class MainActivity extends Activity {
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             Uri url = request.getUrl();
+            String scheme = url.getScheme();
+            if ("data".equals(scheme) || "blob".equals(scheme)) {
+                return null; // in-page data (the slicer loads its WebAssembly this way)
+            }
             if (!HOST.equals(url.getHost())) {
                 return error(403, "Blocked");
             }
@@ -154,45 +164,37 @@ public class MainActivity extends Activity {
 
     private class Bridge {
         @JavascriptInterface
-        public void stlBegin() {
+        public void dataBegin() {
             try {
-                closeQuietly(stlOut);
-                stlOut = new BufferedOutputStream(new FileOutputStream(stlFile));
+                closeQuietly(dataOut);
+                dataOut = new BufferedOutputStream(new FileOutputStream(dataFile));
             } catch (IOException e) {
-                stlOut = null;
+                dataOut = null;
             }
         }
 
         @JavascriptInterface
-        public void stlAppend(String base64) {
-            if (stlOut == null) return;
+        public void dataAppend(String base64) {
+            if (dataOut == null) return;
             try {
-                stlOut.write(Base64.decode(base64, Base64.DEFAULT));
+                dataOut.write(Base64.decode(base64, Base64.DEFAULT));
             } catch (IOException | IllegalArgumentException e) {
-                closeQuietly(stlOut);
-                stlOut = null;
+                closeQuietly(dataOut);
+                dataOut = null;
             }
         }
 
         @JavascriptInterface
-        public void stlSave(String suggestedName) {
-            if (stlOut == null) {
-                callPage("failed", "Could not buffer the STL (storage full?)");
+        public void dataSave(String suggestedName, String mimeType) {
+            if (!finishData()) {
+                callPage("failed", "Could not buffer the file (storage full?)");
                 return;
             }
-            try {
-                stlOut.close();
-            } catch (IOException e) {
-                callPage("failed", "Could not buffer the STL (storage full?)");
-                return;
-            } finally {
-                stlOut = null;
-            }
-            stlName = suggestedName;
+            dataName = suggestedName;
             runOnUiThread(() -> {
                 Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
-                i.setType("model/stl");
+                i.setType(mimeType);
                 i.putExtra(Intent.EXTRA_TITLE, suggestedName);
                 startActivityForResult(i, REQ_SAVE);
             });
@@ -207,6 +209,126 @@ public class MainActivity extends Activity {
                 startActivityForResult(i, REQ_OPEN);
             });
         }
+
+        /** Uploads the buffered file to the printer and optionally starts it. */
+        @JavascriptInterface
+        public void printerSend(String json) {
+            File outgoing = new File(getCacheDir(), "outgoing.bin");
+            boolean buffered = finishData();
+            outgoing.delete();
+            if (!buffered || !dataFile.renameTo(outgoing)) {
+                callPage("printer", "error", "Could not buffer the file (storage full?)");
+                return;
+            }
+            new Thread(() -> sendToPrinter(json, outgoing)).start();
+        }
+
+        @JavascriptInterface
+        public void printerTest(String json) {
+            new Thread(() -> testPrinter(json)).start();
+        }
+
+        @JavascriptInterface
+        public void printerFind() {
+            new Thread(MainActivity.this::findPrinters).start();
+        }
+    }
+
+    private boolean finishData() {
+        if (dataOut == null) return false;
+        try {
+            dataOut.close();
+            return true;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            dataOut = null;
+        }
+    }
+
+    // ---- Printer (runs on background threads) ----
+
+    private void sendToPrinter(String json, File file) {
+        try {
+            JSONObject cfg = new JSONObject(json);
+            String remoteName = cfg.getString("remoteName");
+            String publish = cfg.optString("publish", "");
+            BambuLink link = new BambuLink(cfg.getString("host"), cfg.getString("code"));
+
+            String serial = cfg.optString("serial", "");
+            if (serial.isEmpty() && !publish.isEmpty()) {
+                serial = link.fetchSerial();
+                callPage("printer", "serial", serial);
+            }
+            callPage("printer", "status", "Uploading\u2026");
+            link.upload(file, remoteName, percent -> callPage("printer", "progress", percent));
+
+            if (publish.isEmpty()) {
+                callPage("printer", "done", "Uploaded " + remoteName + " to the printer's SD card.");
+                return;
+            }
+            callPage("printer", "status", "Uploaded. Starting the print\u2026");
+            BambuLink.Reply reply = link.publish(serial, publish, cfg.optString("command", ""), 8000);
+            if ("success".equals(reply.result)) {
+                callPage("printer", "done", "Print started.");
+            } else if (reply.result != null) {
+                String why = reply.reason == null || reply.reason.isEmpty() ? "" : " (" + reply.reason + ")";
+                callPage("printer", "error", "The printer refused to start the print" + why + ". "
+                        + remoteName + " is on its SD card, so you can start it from the printer's screen. "
+                        + "Check that LAN-only mode and Developer Mode are both on.");
+            } else {
+                callPage("printer", "done", "Uploaded and start command sent, but the printer did not "
+                        + "confirm. Check its screen; " + remoteName + " is on the SD card.");
+            }
+        } catch (BambuLink.LinkException e) {
+            callPage("printer", "error", e.getMessage());
+        } catch (IOException | GeneralSecurityException | JSONException | RuntimeException e) {
+            callPage("printer", "error", "Sending failed: " + e);
+        } finally {
+            file.delete();
+        }
+    }
+
+    private void testPrinter(String json) {
+        try {
+            JSONObject cfg = new JSONObject(json);
+            BambuLink link = new BambuLink(cfg.getString("host"), cfg.getString("code"));
+            String serial = link.fetchSerial();
+            callPage("printer", "serial", serial);
+            link.checkMqttLogin();
+            link.checkFtpLogin();
+            callPage("printer", "done", "Connected. Serial " + serial + ". Starting prints also needs "
+                    + "LAN-only mode and Developer Mode on the printer.");
+        } catch (BambuLink.LinkException e) {
+            callPage("printer", "error", e.getMessage());
+        } catch (IOException | GeneralSecurityException | JSONException | RuntimeException e) {
+            callPage("printer", "error", "Test failed: " + e);
+        }
+    }
+
+    private void findPrinters() {
+        WifiManager.MulticastLock lock = null;
+        try {
+            WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null) {
+                lock = wifi.createMulticastLock("scad2stl-discovery");
+                lock.acquire(); // lets broadcast packets through while the screen is on battery
+            }
+            List<String[]> printers = BambuLink.discover(7000);
+            for (String[] p : printers) {
+                callPage("printer", "found", p[0], p[1], p[2], p[3]);
+            }
+            if (printers.isEmpty()) {
+                callPage("printer", "error", "No printer answered. Enter its IP address from the "
+                        + "printer's network screen.");
+            } else {
+                callPage("printer", "idle");
+            }
+        } catch (IOException | RuntimeException e) {
+            callPage("printer", "error", "Search failed: " + e.getMessage());
+        } finally {
+            if (lock != null && lock.isHeld()) lock.release();
+        }
     }
 
     // ---- File picker results ----
@@ -219,14 +341,14 @@ public class MainActivity extends Activity {
         }
         final Uri uri = data.getData();
         if (requestCode == REQ_SAVE) {
-            new Thread(() -> writeStl(uri)).start();
+            new Thread(() -> writeData(uri)).start();
         } else if (requestCode == REQ_OPEN) {
             new Thread(() -> readScad(uri)).start();
         }
     }
 
-    private void writeStl(Uri uri) {
-        try (InputStream in = new FileInputStream(stlFile);
+    private void writeData(Uri uri) {
+        try (InputStream in = new FileInputStream(dataFile);
              OutputStream out = getContentResolver().openOutputStream(uri)) {
             if (out == null) throw new IOException("cannot open destination");
             byte[] buf = new byte[65536];
@@ -236,7 +358,7 @@ public class MainActivity extends Activity {
             }
             out.flush();
             String name = displayName(uri);
-            callPage("saved", true, name != null ? name : stlName);
+            callPage("saved", true, name != null ? name : dataName);
         } catch (IOException | SecurityException e) {
             callPage("saved", false, String.valueOf(e.getMessage()));
         }

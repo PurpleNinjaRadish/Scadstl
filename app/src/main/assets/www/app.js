@@ -35,7 +35,7 @@ difference() {
   };
 
   const code = $("code"), statusEl = $("status"), logEl = $("log");
-  const btnRender = $("render"), btnCancel = $("cancel"), btnSave = $("save");
+  const btnRender = $("render"), btnCancel = $("cancel"), btnSave = $("save"), btnPrint = $("print");
   let worker = null, rendering = false, lastStl = null, baseName = "model", lastError = "";
 
   // ---- UI helpers -------------------------------------------------------
@@ -65,6 +65,7 @@ difference() {
     btnRender.disabled = busy;
     btnCancel.classList.toggle("hidden", !busy);
     btnSave.disabled = busy || !lastStl;
+    btnPrint.disabled = busy || !lastStl;
   }
 
   const viewer = new StlViewer($("view"));
@@ -81,6 +82,7 @@ difference() {
         addLog(m.text);
       } else if (m.type === "done") {
         lastStl = new Uint8Array(m.stl);
+        if (window.PrintUI) window.PrintUI.modelChanged();
         const tris = new DataView(m.stl).getUint32(80, true);
         let dims = "";
         if (viewer.ok) {
@@ -124,29 +126,34 @@ difference() {
   }
 
   // ---- Save / open ------------------------------------------------------
-  function save() {
-    if (!lastStl) return;
-    const name = baseName + ".stl";
-    if (bridge) {
-      // Hand the bytes to Java in base64 chunks, then let Android show its "save as" picker.
-      const CHUNK = 3 * 131072;
-      bridge.stlBegin();
-      for (let off = 0; off < lastStl.length; off += CHUNK) {
-        const part = lastStl.subarray(off, Math.min(off + CHUNK, lastStl.length));
-        let bin = "";
-        for (let i = 0; i < part.length; i += 0x8000) {
-          bin += String.fromCharCode.apply(null, part.subarray(i, i + 0x8000));
-        }
-        bridge.stlAppend(btoa(bin));
+  // Hands bytes to MainActivity in base64 chunks (it buffers them in a temp file).
+  function pushBytes(bytes) {
+    const CHUNK = 3 * 131072;
+    bridge.dataBegin();
+    for (let off = 0; off < bytes.length; off += CHUNK) {
+      const part = bytes.subarray(off, Math.min(off + CHUNK, bytes.length));
+      let bin = "";
+      for (let i = 0; i < part.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, part.subarray(i, i + 0x8000));
       }
-      bridge.stlSave(name);
+      bridge.dataAppend(btoa(bin));
+    }
+  }
+  // Saves through Android's "save as" picker, or as a download in a plain browser.
+  function saveBytes(bytes, name, mime) {
+    if (bridge) {
+      pushBytes(bytes);
+      bridge.dataSave(name, mime);
     } else {
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([lastStl], { type: "model/stl" }));
+      a.href = URL.createObjectURL(new Blob([bytes], { type: mime }));
       a.download = name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     }
+  }
+  function save() {
+    if (lastStl) saveBytes(lastStl, baseName + ".stl", "model/stl");
   }
   function setCode(text, name) {
     code.value = text;
@@ -158,8 +165,18 @@ difference() {
   }
 
   // Callbacks invoked from MainActivity.
+  window.App = {
+    bridge, pushBytes, saveBytes,
+    stl: () => lastStl,
+    name: () => baseName,
+    snapshot: () => (viewer.ok ? viewer.snapshot() : null),
+  };
   window.onNative = {
-    saved(ok, msg) { setStatus(ok ? "Saved " + msg : "Save failed: " + msg, !ok); },
+    saved(ok, msg) {
+      setStatus(ok ? "Saved " + msg : "Save failed: " + msg, !ok);
+      if (window.PrintUI) window.PrintUI.saved(ok, msg);
+    },
+    printer(...args) { if (window.PrintUI) window.PrintUI.native(...args); },
     opened(name, text) { setCode(text, name); setStatus("Opened " + name); },
     failed(msg) { setStatus(msg, true); },
   };
@@ -168,6 +185,7 @@ difference() {
   btnRender.onclick = render;
   btnCancel.onclick = cancel;
   btnSave.onclick = save;
+  btnPrint.onclick = () => window.PrintUI && window.PrintUI.open();
   $("tabPreview").onclick = () => showTab("preview");
   $("tabLog").onclick = () => showTab("log");
   $("open").onclick = () => (bridge ? bridge.openScad() : $("file").click());

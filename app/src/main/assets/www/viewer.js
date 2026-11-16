@@ -58,6 +58,12 @@ function StlViewer(canvas) {
   };
   const invalidate = () => { if (!dirty) { dirty = true; requestAnimationFrame(draw); } };
   this.redraw = invalidate;
+  // PNG data URL of the current view, or null when nothing is shown.
+  this.snapshot = () => {
+    if (!count || !canvas.clientWidth) return null;
+    draw();
+    try { return canvas.toDataURL("image/png"); } catch (e) { return null; }
+  };
 
   // bytes: Uint8Array holding a binary STL file.
   this.setMesh = (bytes) => {

@@ -1,45 +1,81 @@
 # SCAD to STL (Android)
 
 Type or open OpenSCAD code on your phone, tap **Render**, preview the model, and
-**Save STL**. Everything runs on the device, with no network access and no permissions.
+**Save STL**. Then, for a Bambu Lab P1P or P1S, **Print** slices the model on the phone and
+either saves the print file or sends it to the printer over Wi-Fi.
+
+Rendering and slicing run on the device. The only network traffic is to your printer.
+
+## Using it
+
+1. Write or open a `.scad` file (the app also appears under "Open with" for `.scad` files).
+2. **Render**, check the preview, optionally **Save STL**.
+3. **Print** opens the slice screen. Pick printer, filament, plate, layer height, infill,
+   walls, supports and brim, then **Slice**.
+4. Either:
+   - **Save G-code** / **Save 3MF** and copy the file to the printer's microSD card, or
+   - **Send to printer** (see below).
+
+### Sending to the printer
+
+Bambu firmware only lets third-party apps start prints when the printer is in
+**LAN-only mode** with **Developer Mode** switched on (printer screen: Settings, then
+WLAN / Network). While that is on, Bambu Handy and the cloud do not work with that printer.
+
+In the app enter the printer's IP address and access code (both shown on the printer's
+network screen), or tap **Find printer**. **Test connection** checks the address and code
+without printing. The serial number is read from the printer if you leave it empty.
+
+"Send as" chooses between a Bambu project (`.gcode.3mf`, started with the same command
+Bambu Studio uses) and plain G-code. "After upload" lets you only put the file on the SD
+card and start it from the printer's screen.
+
+### Before the first print
+
+The printer side has been tested against a simulated printer only, not real hardware.
+Start with a small model, stay next to the printer, and be ready to press stop. If the
+upload works but the print does not start, try the other "Send as" option, or start the
+uploaded file from the printer's screen.
 
 ## How it works
 
-- `app/src/main/assets/www/` is the whole UI: a code editor, a WebGL preview and a
-  log. `worker.js` runs OpenSCAD compiled to WebAssembly (`openscad.js`, from the
-  `openscad-wasm-prebuilt` npm package) in a background thread and exports binary STL.
-- `MainActivity.java` is a small WebView shell. It serves those assets from a private
-  https origin and handles the two things a page cannot do: Android's "open file" and
-  "save as" pickers.
-- Liberation fonts are bundled so `text()` works (Sans regular/bold/italic, Mono, Serif).
+- `app/src/main/assets/www/` is the UI: editor, WebGL preview, log, and the slice screen.
+- `worker.js` runs OpenSCAD compiled to WebAssembly (`openscad.js`, from the
+  `openscad-wasm-prebuilt` npm package) and exports binary STL.
+- `slicer/` holds CuraEngine compiled to WebAssembly (from the `cura-wasm` npm package)
+  and `slice-core.js`, which centres the model on the 256 mm bed, runs the engine with
+  explicit settings, and wraps the result in Bambu's own P1 start and end G-code
+  (`slicer/bambu/`, taken unmodified from Bambu Studio's printer profiles).
+- `MainActivity.java` is a WebView shell: file pickers, "Open with", and a bridge to
+  `BambuLink.java`, which uploads over implicit FTPS (port 990) and sends the start command
+  over MQTT/TLS (port 8883) as user `bblp` with the access code. The printer's certificate
+  is signed by Bambu's private CA, so it is not verified.
+- Liberation fonts are bundled so `text()` works.
 
 ## Getting an APK
 
-**Without a computer (GitHub builds it):**
+Every push to `main` builds the app with GitHub Actions and publishes `scad2stl.apk` under
+Releases, "Latest build". Open that file on the phone to install it. Builds are
+debug-signed with a new key each time, so uninstall the old app before installing a newer
+build.
 
-1. Create a GitHub repository and upload the contents of this folder to the `main` branch.
-2. The "Build APK" workflow runs automatically (Actions tab), takes a few minutes, and
-   publishes `scad2stl.apk` under Releases → "Latest build".
-3. Open that file on your phone and allow installing from your browser when asked.
-
-**With Android Studio:** open this folder, let it sync, press Run.
-
-**Command line:** `./gradlew assembleDebug` (needs JDK 17 and the Android SDK), then
-install `app/build/outputs/apk/debug/app-debug.apk`.
-
-Builds are debug-signed. Each GitHub build uses a new debug key, so uninstall the old
-app before installing a newer build.
+With Android Studio: open this folder and press Run. Command line: `./gradlew assembleDebug`
+(JDK 17 and the Android SDK).
 
 ## Limits
 
-- This OpenSCAD build uses the CGAL backend (no Manifold), so heavy boolean work such
-  as `minkowski()` or high `$fn` unions is slow on a phone. Use **Cancel** if needed.
-- Single file only: `include`/`use` of other files and libraries such as MCAD or BOSL2
-  are not bundled.
-- Fonts other than Liberation fall back to Liberation Sans.
+- OpenSCAD here uses the CGAL backend (no Manifold), so heavy boolean work is slow on a
+  phone. Single file only: `include`/`use` and libraries such as MCAD or BOSL2 are not
+  bundled.
+- The slicer is CuraEngine, not Bambu Studio: one object, one filament, 0.4 mm nozzle,
+  generic PLA or PETG, and conservative speeds. No multi-colour, no tree supports, and
+  print quality will not match a tuned Bambu Studio profile.
+- Time and filament figures are estimates.
 - Requires Android 8.0 or newer.
 
 ## Licences
 
-OpenSCAD is GPL-2.0-or-later, and this app bundles it, so distribute the app under the
-GPL as well. Liberation fonts are under the SIL Open Font License 1.1.
+The app bundles OpenSCAD (GPL-2.0-or-later), CuraEngine (AGPL-3.0-or-later, via cura-wasm)
+and G-code templates from Bambu Studio (AGPL-3.0), so distribute it under the AGPL-3.0.
+Cura's printer definitions are LGPL-3.0-or-later. Liberation fonts are under the SIL Open
+Font License 1.1.
