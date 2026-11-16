@@ -14,10 +14,45 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- "Open with": files whose name ends in .scad, whatever type the sender reports. -->
+            <intent-filter android:label="@string/app_name">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.scad" />
+                <data android:pathPattern=".*\\..*\\.scad" />
+                <data android:pathPattern=".*\\..*\\..*\\.scad" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.scad" />
+                <data android:pathPattern=".*\\.SCAD" />
+                <data android:pathPattern=".*\\..*\\.SCAD" />
+                <data android:pathPattern=".*\\..*\\..*\\.SCAD" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.SCAD" />
+            </intent-filter>
+
+            <!-- "Open with": senders that hide the file name (Downloads, mail, chat apps).
+                 .scad has no official MIME type, so these are the types Android reports for it. -->
+            <intent-filter android:label="@string/app_name">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/x-openscad" />
+                <data android:mimeType="text/x-openscad" />
+                <data android:mimeType="model/x-openscad" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
     </application>

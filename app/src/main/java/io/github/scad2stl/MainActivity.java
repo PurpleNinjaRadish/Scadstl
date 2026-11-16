@@ -45,6 +45,8 @@ public class MainActivity extends Activity {
     private File stlFile;          // rendered STL waiting to be saved
     private OutputStream stlOut;   // open while the page is sending chunks
     private String stlName = "model.stl";
+    private boolean pageReady;     // true once index.html has loaded
+    private Uri pendingOpen;       // .scad file handed to us before the page was ready
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,7 +62,29 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new AssetClient());
         web.addJavascriptInterface(new Bridge(), "Android");
         setContentView(web);
+        if (savedInstanceState == null) {
+            pendingOpen = viewUri(getIntent());
+        }
         web.loadUrl(START_URL);
+    }
+
+    /** Another app (file manager, browser, mail) asked us to open a file while we were running. */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Uri uri = viewUri(intent);
+        if (uri == null) return;
+        if (pageReady) {
+            new Thread(() -> readScad(uri)).start();
+        } else {
+            pendingOpen = uri;
+        }
+    }
+
+    private static Uri viewUri(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return null;
+        return intent.getData();
     }
 
     @Override
@@ -93,6 +117,16 @@ public class MainActivity extends Activity {
                 return new WebResourceResponse(mime, text ? "utf-8" : null, in);
             } catch (IOException e) {
                 return error(404, "Not Found");
+            }
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            pageReady = true;
+            final Uri uri = pendingOpen;
+            pendingOpen = null;
+            if (uri != null) {
+                new Thread(() -> readScad(uri)).start();
             }
         }
 
