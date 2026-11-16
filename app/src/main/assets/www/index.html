@@ -171,6 +171,20 @@
         <button id="send" class="primary" disabled>Send to printer</button>
       </div>
       <p id="sendMsg" class="msg"></p>
+
+      <h2>Send via PC (Bambu Connect)</h2>
+      <p class="note">Keeps the printer in its normal mode. Run the PC helper on a Windows PC that has Bambu Connect; it shows the address and pairing code to enter here. The file opens in Bambu Connect, where you press Print.</p>
+      <div class="form">
+        <label for="pPcHost">PC address</label>
+        <input id="pPcHost" inputmode="decimal" autocomplete="off" placeholder="192.168.1.20">
+        <label for="pPcCode">Pairing code</label>
+        <input id="pPcCode" inputmode="numeric" autocomplete="off">
+      </div>
+      <div class="row">
+        <button id="pcTest">Test PC</button>
+        <button id="pcSend" class="primary" disabled>Send to PC</button>
+      </div>
+      <p id="pcMsg" class="msg"></p>
     </div>
   </section>
   <div id="confirm" class="hidden"><div>

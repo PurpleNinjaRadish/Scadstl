@@ -223,6 +223,33 @@ public class MainActivity extends Activity {
             new Thread(() -> sendToPrinter(json, outgoing)).start();
         }
 
+        /** Sends the buffered project to the PC helper, which opens it in Bambu Connect. */
+        @JavascriptInterface
+        public void pcSend(String json) {
+            File outgoing = new File(getCacheDir(), "outgoing-pc.bin");
+            boolean buffered = finishData();
+            outgoing.delete();
+            if (!buffered || !dataFile.renameTo(outgoing)) {
+                callPage("pc", "error", "Could not buffer the file (storage full?)");
+                return;
+            }
+            new Thread(() -> sendToPc(json, outgoing)).start();
+        }
+
+        @JavascriptInterface
+        public void pcTest(String json) {
+            new Thread(() -> {
+                try {
+                    JSONObject cfg = new JSONObject(json);
+                    callPage("pc", "done", new PcLink(cfg.getString("host"), cfg.getString("code")).ping());
+                } catch (BambuLink.LinkException e) {
+                    callPage("pc", "error", e.getMessage());
+                } catch (IOException | JSONException | RuntimeException e) {
+                    callPage("pc", "error", "Test failed: " + e);
+                }
+            }).start();
+        }
+
         @JavascriptInterface
         public void printerTest(String json) {
             new Thread(() -> testPrinter(json)).start();
@@ -284,6 +311,23 @@ public class MainActivity extends Activity {
             callPage("printer", "error", e.getMessage());
         } catch (IOException | GeneralSecurityException | JSONException | RuntimeException e) {
             callPage("printer", "error", "Sending failed: " + e);
+        } finally {
+            file.delete();
+        }
+    }
+
+    private void sendToPc(String json, File file) {
+        try {
+            JSONObject cfg = new JSONObject(json);
+            PcLink link = new PcLink(cfg.getString("host"), cfg.getString("code"));
+            link.ping(); // fails fast, with a clear message, on a wrong address or pairing code
+            String message = link.send(file, cfg.getString("name"),
+                    percent -> callPage("pc", "progress", percent));
+            callPage("pc", "done", message);
+        } catch (BambuLink.LinkException e) {
+            callPage("pc", "error", e.getMessage());
+        } catch (IOException | JSONException | RuntimeException e) {
+            callPage("pc", "error", "Sending failed: " + e);
         } finally {
             file.delete();
         }

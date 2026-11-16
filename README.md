@@ -30,6 +30,23 @@ without printing. The serial number is read from the printer if you leave it emp
 Bambu Studio uses) and plain G-code. "After upload" lets you only put the file on the SD
 card and start it from the printer's screen.
 
+### Sending through a PC with Bambu Connect
+
+This route leaves the printer in its normal mode. A small helper on a Windows PC receives
+the sliced file from the phone and opens it in Bambu Connect, where you choose the plate
+and press Print (at the PC, or through remote desktop).
+
+1. On the PC, install Bambu Connect and sign in, and install Python 3.
+2. Download `scad2stl-pc-helper.zip` from this repository's "Latest build" release, unzip
+   it, and double-click `start-helper.bat`. Allow Python on private networks if Windows asks.
+3. The helper window shows a PC address and a pairing code. Enter both under
+   "Send via PC" in the app, tap **Test PC**, then **Send to PC** after slicing.
+
+Files are kept in `Documents\Scad2Stl` on the PC. The helper only accepts uploads that
+carry the pairing code, and it speaks plain HTTP, so use it on your home network only.
+Whether Bambu Connect accepts a project that was not sliced by Bambu Studio or OrcaSlicer
+has not been confirmed.
+
 ### Before the first print
 
 The printer side has been tested against a simulated printer only, not real hardware.

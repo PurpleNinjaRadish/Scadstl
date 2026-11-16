@@ -13,6 +13,7 @@
     pInfill: ["infill", 15], pWalls: ["walls", "2"], pSupport: ["support", "off"], pBrim: ["brim", false],
     pHost: ["host", ""], pCode: ["code", ""], pSerial: ["serial", ""], pSource: ["source", "loaded"],
     pLevel: ["level", true], pFormat: ["format", "project"], pAfter: ["after", "start"],
+    pPcHost: ["pcHost", ""], pPcCode: ["pcCode", ""],
   };
   const SLICE_FIELDS = ["pPrinter", "pFilament", "pPlate", "pNozzle", "pBed", "pLayer", "pInfill", "pWalls", "pSupport", "pBrim"];
 
@@ -45,6 +46,7 @@
   }
   const sliceMsg = (t, k) => msg($("sliceMsg"), t, k);
   const sendMsg = (t, k) => msg($("sendMsg"), t, k);
+  const pcMsg = (t, k) => msg($("pcMsg"), t, k);
 
   function refresh() {
     const ready = !!result && !slicing;
@@ -54,6 +56,8 @@
     $("send").disabled = !ready || busy || !bridge;
     $("find").disabled = busy || !bridge;
     $("test").disabled = busy || !bridge;
+    $("pcTest").disabled = busy || !bridge;
+    $("pcSend").disabled = !ready || busy || !bridge;
   }
 
   function duration(sec) {
@@ -173,6 +177,31 @@
     }
   }
 
+  // ---- sending via the PC helper ----------------------------------------
+  function pcConfig() {
+    const s = readSettings();
+    if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(s.pcHost)) { pcMsg("Enter the PC address the helper shows, for example 192.168.1.20.", "err"); return null; }
+    if (!s.pcCode) { pcMsg("Enter the pairing code the helper shows.", "err"); return null; }
+    return { host: s.pcHost, code: s.pcCode };
+  }
+  function pcSend() {
+    if (!result || busy) return;
+    const cfg = pcConfig();
+    if (!cfg) return;
+    busy = true; refresh();
+    pcMsg("Connecting to the PC…");
+    setTimeout(() => {
+      App.pushBytes(result.project);
+      bridge.pcSend(JSON.stringify({ ...cfg, name: safeName() }));
+    }, 30);
+  }
+  function pcNative(event, a) {
+    if (event === "progress") { pcMsg("Sending… " + a + "%"); return; }
+    busy = false;
+    pcMsg(a, event === "done" ? "ok" : "err");
+    refresh();
+  }
+
   // Events from MainActivity.
   function native(event, a, b, c, d) {
     if (event === "status") {
@@ -217,6 +246,13 @@
     busy = true; refresh(); sendMsg("Testing…");
     bridge.printerTest(JSON.stringify(cfg));
   };
+  $("pcSend").onclick = pcSend;
+  $("pcTest").onclick = () => {
+    const cfg = pcConfig();
+    if (!cfg) return;
+    busy = true; refresh(); pcMsg("Testing…");
+    bridge.pcTest(JSON.stringify(cfg));
+  };
   $("sheetClose").onclick = () => $("sheet").classList.add("hidden");
   $("confirmNo").onclick = () => { $("confirm").classList.add("hidden"); confirmAction = null; };
   $("confirmYes").onclick = () => {
@@ -234,6 +270,6 @@
     },
     modelChanged() { invalidate("The model changed. Slice again."); },
     saved(ok, text) { if (!$("sheet").classList.contains("hidden")) sliceMsg(ok ? "Saved " + text : "Save failed: " + text, ok ? "ok" : "err"); },
-    native,
+    native, pcNative,
   };
 })();

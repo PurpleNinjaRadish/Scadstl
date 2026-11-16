@@ -24,6 +24,7 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk scad2stl.apk
+          (cd pc-helper && zip -r ../scad2stl-pc-helper.zip scad2stl_pc_helper.py start-helper.bat)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -37,7 +38,7 @@ jobs:
         run: |
           gh release delete latest --yes --cleanup-tag || true
           sleep 3
-          gh release create latest scad2stl.apk \
+          gh release create latest scad2stl.apk scad2stl-pc-helper.zip \
             --target "$GITHUB_SHA" \
             --title "Latest build" \
-            --notes "Debug build of SCAD to STL. Download scad2stl.apk on your phone and open it to install."
+            --notes "Debug build of SCAD to STL. Download scad2stl.apk on your phone and open it to install. scad2stl-pc-helper.zip is the optional Windows helper for sending prints through Bambu Connect."

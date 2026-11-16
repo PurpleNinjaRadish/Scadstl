@@ -177,6 +177,7 @@ difference() {
       if (window.PrintUI) window.PrintUI.saved(ok, msg);
     },
     printer(...args) { if (window.PrintUI) window.PrintUI.native(...args); },
+    pc(...args) { if (window.PrintUI) window.PrintUI.pcNative(...args); },
     opened(name, text) { setCode(text, name); setStatus("Opened " + name); },
     failed(msg) { setStatus(msg, true); },
   };
