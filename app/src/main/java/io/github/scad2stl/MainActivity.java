@@ -321,8 +321,14 @@ public class MainActivity extends Activity {
             JSONObject cfg = new JSONObject(json);
             PcLink link = new PcLink(cfg.getString("host"), cfg.getString("code"));
             link.ping(); // fails fast, with a clear message, on a wrong address or pairing code
-            String message = link.send(file, cfg.getString("name"),
-                    percent -> callPage("pc", "progress", percent));
+            boolean auto = cfg.optBoolean("auto", false);
+            String message = link.send(file, cfg.getString("name"), auto, percent -> {
+                if (percent < 100) {
+                    callPage("pc", "progress", percent);
+                } else if (auto) {
+                    callPage("pc", "status", "Sent. Bambu Connect is importing and pressing Print\u2026");
+                }
+            });
             callPage("pc", "done", message);
         } catch (BambuLink.LinkException e) {
             callPage("pc", "error", e.getMessage());

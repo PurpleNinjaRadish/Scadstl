@@ -440,70 +440,219 @@ export async function zip(files) {
 }
 
 // ---- Bambu .gcode.3mf project --------------------------------------------------------------
+//
+// Bambu Connect silently ignores a .gcode.3mf unless it looks like Bambu Studio's
+// "export plate sliced file" output: a complete project_settings.config (~550 keys, per-filament
+// arrays padded to 5 slots), and specific keys, in a specific order, in model_settings.config and
+// slice_info.config. The layout below follows bambox (github.com/estampo/bambox, MIT), whose
+// authors worked out by trial what Bambu Connect accepts; its P1S base profile is bundled in
+// bambu/base_p1s.json.
 
 const xmlEscape = (s) => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
 
-// gcode: Uint8Array of the final G-code. thumbnail: optional PNG bytes.
-export async function build3mf(gcode, o, stats, thumbnail) {
-  const enc = new TextEncoder();
+export const BAMBU_STUDIO_VERSION = "02.05.00.66";
+const SLOTS = 5; // P1 with AMS: 4 AMS slots + external spool
+const FILAMENT_COLOR = "#F5B301";
+
+// 1x1 transparent PNG, used when no preview image is available.
+const PLACEHOLDER_PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1,
+  0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
+  13, 10, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);
+
+// Keys Bambu Connect requires that the base profile may lack.
+const BC_REQUIRED_KEYS = {
+  bbl_use_printhost: "1", default_bed_type: "", filament_retract_lift_above: ["0"],
+  filament_retract_lift_below: ["0"], filament_retract_lift_enforce: [""], host_type: "octoprint",
+  pellet_flow_coefficient: "0", pellet_modded_printer: "0", printhost_authorization_type: "key",
+  printhost_ssl_ignore_revoke: "0", thumbnails_format: "BTT_TFT",
+};
+
+const PLATE_TEMP_KEYS = {
+  "Textured PEI Plate": "textured_plate_temp",
+  "High Temp Plate": "hot_plate_temp",
+  "Cool Plate": "cool_plate_temp",
+};
+
+// profiles: { base: {...}, varyingKeys: [...], filaments: { PLA: {...}, PETG: {...} } }
+export function projectSettings(o, profiles) {
+  const p = PRINTERS[o.printer];
+  const fil = profiles.filaments[o.filament];
+  if (!fil) throw new Error("No settings profile for " + o.filament);
+  const out = {};
+  for (const [k, v] of Object.entries(profiles.base)) out[k] = Array.isArray(v) ? v.slice() : v;
+  for (const k of profiles.varyingKeys) {
+    out[k] = Array(SLOTS).fill(k in fil ? String(fil[k]) : "");
+  }
+  out.filament_colour = Array(SLOTS).fill(FILAMENT_COLOR);
+
+  // What this print actually uses.
+  const temp = String(o.nozzleTemp), bed = String(o.bedTemp);
+  out.nozzle_temperature = Array(SLOTS).fill(temp);
+  out.nozzle_temperature_initial_layer = Array(SLOTS).fill(temp);
+  const plateKey = PLATE_TEMP_KEYS[o.plate];
+  if (plateKey) {
+    out[plateKey] = Array(SLOTS).fill(bed);
+    out[plateKey + "_initial_layer"] = Array(SLOTS).fill(bed);
+  }
+  Object.assign(out, {
+    printer_model: p.name,
+    printer_settings_id: p.name + " 0.4 nozzle",
+    curr_bed_type: o.plate,
+    layer_height: String(o.layerHeight),
+    wall_loops: String(o.walls),
+    sparse_infill_density: o.infill + "%",
+    enable_support: o.support !== "off" ? "1" : "0",
+    support_on_build_plate_only: o.support === "buildplate" ? "1" : "0",
+    brim_type: o.brim ? "outer_only" : "no_brim",
+    filament_settings_id: Array(SLOTS).fill(String(fil.filament_settings_id)),
+  });
+  if (Array.isArray(out.default_filament_profile)) {
+    out.default_filament_profile = out.default_filament_profile.map((s) => s.replace(/P1S/g, o.printer));
+  }
+
+  for (const [k, v] of Object.entries(BC_REQUIRED_KEYS)) {
+    if (!(k in out)) out[k] = Array.isArray(v) ? v.slice() : v;
+  }
+  for (const [k, v] of Object.entries(out)) {
+    if (Array.isArray(v) && v.length > 0 && v.length < SLOTS) {
+      const padded = v.slice();
+      while (padded.length < SLOTS) padded.push(padded[padded.length - 1]);
+      out[k] = padded;
+    }
+  }
+  return out;
+}
+
+const ones = (n, v) => Array(n).fill(v).join(" ");
+
+function modelSettingsXml() {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<config>",
+    "  <plate>",
+    '    <metadata key="plater_id" value="1"/>',
+    '    <metadata key="plater_name" value=""/>',
+    '    <metadata key="locked" value="false"/>',
+    '    <metadata key="filament_map_mode" value="Auto For Flush"/>',
+    '    <metadata key="filament_maps" value="' + ones(SLOTS, "1") + '"/>',
+    '    <metadata key="filament_volume_maps" value="' + ones(SLOTS, "0") + '"/>',
+    '    <metadata key="gcode_file" value="Metadata/plate_1.gcode"/>',
+    '    <metadata key="thumbnail_file" value="Metadata/plate_1.png"/>',
+    '    <metadata key="thumbnail_no_light_file" value="Metadata/plate_no_light_1.png"/>',
+    '    <metadata key="top_file" value="Metadata/top_1.png"/>',
+    '    <metadata key="pick_file" value="Metadata/pick_1.png"/>',
+    '    <metadata key="pattern_bbox_file" value="Metadata/plate_1.json"/>',
+    "  </plate>",
+    "</config>",
+    "",
+  ].join("\n");
+}
+
+function sliceInfoXml(o, stats) {
   const p = PRINTERS[o.printer], f = FILAMENTS[o.filament];
-  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<config>",
+    "  <header>",
+    '    <header_item key="X-BBL-Client-Type" value="slicer"/>',
+    '    <header_item key="X-BBL-Client-Version" value="' + BAMBU_STUDIO_VERSION + '"/>',
+    "  </header>",
+    "  <plate>",
+    '    <metadata key="index" value="1"/>',
+    '    <metadata key="extruder_type" value="0"/>',
+    '    <metadata key="nozzle_volume_type" value="0"/>',
+    '    <metadata key="printer_model_id" value="' + p.modelId + '"/>',
+    '    <metadata key="nozzle_diameters" value="0.4"/>',
+    '    <metadata key="timelapse_type" value="0"/>',
+    '    <metadata key="prediction" value="' + stats.printSeconds + '"/>',
+    '    <metadata key="weight" value="' + stats.grams.toFixed(2) + '"/>',
+    '    <metadata key="outside" value="false"/>',
+    '    <metadata key="support_used" value="' + (o.support !== "off") + '"/>',
+    '    <metadata key="label_object_enabled" value="false"/>',
+    '    <metadata key="filament_maps" value="' + ones(SLOTS, "1") + '"/>',
+    '    <metadata key="limit_filament_maps" value="' + ones(SLOTS, "0") + '"/>',
+    '    <object identify_id="1" name="' + xmlEscape(o.name) + '" skipped="false" />',
+    '    <filament id="1" tray_info_idx="' + f.trayInfo + '" type="' + f.type + '" color="' + FILAMENT_COLOR +
+      '" used_m="' + stats.meters.toFixed(2) + '" used_g="' + stats.grams.toFixed(2) +
+      '" used_for_object="true" used_for_support="false" group_id="0" nozzle_diameter="0.40" volume_type="Standard"/>',
+    "  </plate>",
+    "</config>",
+    "",
+  ].join("\n");
+}
+
+const MODEL_XML = (title) => [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">',
+  ' <metadata name="Application">BambuStudio-' + BAMBU_STUDIO_VERSION + "</metadata>",
+  ' <metadata name="BambuStudio:3mfVersion">1</metadata>',
+  ...["Copyright", "CreationDate", "Description", "Designer", "DesignerCover", "DesignerUserId", "License",
+    "ModificationDate", "Origin", "ProfileCover", "ProfileDescription", "ProfileTitle"]
+    .map((n) => ' <metadata name="' + n + '"></metadata>'),
+  ' <metadata name="Title">' + xmlEscape(title) + "</metadata>",
+  " <resources>",
+  " </resources>",
+  " <build/>",
+  "</model>",
+  "",
+].join("\n");
+
+const CONTENT_TYPES_XML = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+  ' <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+  ' <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n' +
+  ' <Default Extension="png" ContentType="image/png"/>\n' +
+  ' <Default Extension="gcode" ContentType="text/x.gcode"/>\n' +
+  "</Types>";
+
+const RELS_XML = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+  ' <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n' +
+  ' <Relationship Target="/Metadata/plate_1.png" Id="rel-2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>\n' +
+  ' <Relationship Target="/Metadata/plate_1.png" Id="rel-4" Type="http://schemas.bambulab.com/package/2021/cover-thumbnail-middle"/>\n' +
+  ' <Relationship Target="/Metadata/plate_1_small.png" Id="rel-5" Type="http://schemas.bambulab.com/package/2021/cover-thumbnail-small"/>\n' +
+  "</Relationships>";
+
+const MODEL_SETTINGS_RELS_XML = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+  ' <Relationship Target="/Metadata/plate_1.gcode" Id="rel-1" Type="http://schemas.bambulab.com/package/2021/gcode"/>\n' +
+  "</Relationships>";
+
+// gcode: Uint8Array of the final G-code. thumbnail: optional PNG bytes.
+export async function build3mf(gcode, o, stats, thumbnail, profiles) {
+  if (!profiles) throw new Error("Bambu settings profiles are missing");
+  const enc = new TextEncoder();
+  const settings = projectSettings(o, profiles);
+  const plate = {
+    bed_type: "textured_plate", // Bambu Connect rejects other values here; the real plate is curr_bed_type
+    filament_colors: [FILAMENT_COLOR], filament_ids: [0], first_extruder: 0,
+    is_seq_print: false, nozzle_diameter: 0.4, version: 2,
+  };
+  const png = thumbnail && thumbnail.length > 24 ? thumbnail : PLACEHOLDER_PNG;
   const files = [
-    { name: "[Content_Types].xml", data: enc.encode(xml +
-      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
-      ' <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
-      ' <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n' +
-      ' <Default Extension="png" ContentType="image/png"/>\n' +
-      ' <Default Extension="gcode" ContentType="text/x.gcode"/>\n' +
-      '</Types>\n') },
-    { name: "_rels/.rels", data: enc.encode(xml +
-      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
-      ' <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n' +
-      (thumbnail ? ' <Relationship Target="/Metadata/plate_1.png" Id="rel-2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>\n' : "") +
-      '</Relationships>\n') },
-    { name: "3D/3dmodel.model", data: enc.encode(xml +
-      '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">\n' +
-      ' <metadata name="Application">SCAD to STL</metadata>\n' +
-      ' <metadata name="BambuStudio:3mfVersion">1</metadata>\n' +
-      ' <metadata name="Title">' + xmlEscape(o.name) + '</metadata>\n' +
-      ' <resources/>\n <build/>\n</model>\n') },
-    { name: "Metadata/model_settings.config", data: enc.encode(xml +
-      '<config>\n  <plate>\n' +
-      '    <metadata key="plater_id" value="1"/>\n' +
-      '    <metadata key="plater_name" value=""/>\n' +
-      '    <metadata key="locked" value="false"/>\n' +
-      '    <metadata key="gcode_file" value="Metadata/plate_1.gcode"/>\n' +
-      (thumbnail ? '    <metadata key="thumbnail_file" value="Metadata/plate_1.png"/>\n' : "") +
-      '  </plate>\n</config>\n') },
-    { name: "Metadata/slice_info.config", data: enc.encode(xml +
-      '<config>\n  <header>\n' +
-      '    <header_item key="X-BBL-Client-Type" value="slicer"/>\n' +
-      '    <header_item key="X-BBL-Client-Version" value="01.10.00.00"/>\n' +
-      '  </header>\n  <plate>\n' +
-      '    <metadata key="index" value="1"/>\n' +
-      '    <metadata key="printer_model_id" value="' + p.modelId + '"/>\n' +
-      '    <metadata key="nozzle_diameters" value="0.4"/>\n' +
-      '    <metadata key="timelapse_type" value="0"/>\n' +
-      '    <metadata key="prediction" value="' + stats.printSeconds + '"/>\n' +
-      '    <metadata key="weight" value="' + stats.grams.toFixed(2) + '"/>\n' +
-      '    <metadata key="outside" value="false"/>\n' +
-      '    <metadata key="support_used" value="' + (o.support !== "off") + '"/>\n' +
-      '    <metadata key="label_object_enabled" value="false"/>\n' +
-      '    <object identify_id="1" name="' + xmlEscape(o.name) + '" skipped="false"/>\n' +
-      '    <filament id="1" tray_info_idx="' + f.trayInfo + '" type="' + f.type + '" color="#F5B301" used_m="' +
-        stats.meters.toFixed(2) + '" used_g="' + stats.grams.toFixed(2) + '"/>\n' +
-      '  </plate>\n</config>\n') },
-    { name: "Metadata/plate_1.gcode", data: gcode },
+    { name: "[Content_Types].xml", data: enc.encode(CONTENT_TYPES_XML) },
+    { name: "Metadata/plate_1.json", data: enc.encode(JSON.stringify(plate)) },
+    { name: "3D/3dmodel.model", data: enc.encode(MODEL_XML(o.name)) },
+    { name: "Metadata/project_settings.config", data: enc.encode(JSON.stringify(settings, null, 4) + "\n") },
     { name: "Metadata/plate_1.gcode.md5", data: enc.encode(md5(gcode)) },
+    { name: "Metadata/plate_1.gcode", data: gcode },
+    { name: "Metadata/_rels/model_settings.config.rels", data: enc.encode(MODEL_SETTINGS_RELS_XML) },
+    { name: "Metadata/model_settings.config", data: enc.encode(modelSettingsXml()) },
+    { name: "Metadata/slice_info.config", data: enc.encode(sliceInfoXml(o, stats)) },
+    { name: "_rels/.rels", data: enc.encode(RELS_XML) },
+    { name: "Metadata/plate_1.png", data: png },
+    { name: "Metadata/plate_no_light_1.png", data: png },
+    { name: "Metadata/plate_1_small.png", data: png },
+    { name: "Metadata/top_1.png", data: PLACEHOLDER_PNG },
+    { name: "Metadata/pick_1.png", data: PLACEHOLDER_PNG },
   ];
-  if (thumbnail) files.push({ name: "Metadata/plate_1.png", data: thumbnail });
   return zip(files);
 }
 
 // ---- Whole pipeline ------------------------------------------------------------------------
 
 // env: { createEngine(opts) -> Promise<emscripten module>, definitions: {name: text},
-//        templates: {name: text}, onProgress(0..1), onLog(text) }
+//        templates: {name: text}, profiles (see projectSettings), onProgress(0..1), onLog(text) }
 export async function slice(stlBytes, options, env, thumbnail) {
   const o = { ...DEFAULTS, ...options };
   if (!PRINTERS[o.printer]) throw new Error("Unknown printer " + o.printer);
@@ -539,6 +688,6 @@ export async function slice(stlBytes, options, env, thumbnail) {
   try { raw = engine.FS.readFile("/out.gcode"); } catch (e) { throw new Error("Slicer produced no output"); }
   const { text, stats } = assembleGcode(new TextDecoder().decode(raw), o, mesh, env.templates, usedMm3);
   const gcode = new TextEncoder().encode(text);
-  const project = await build3mf(gcode, o, stats, thumbnail);
+  const project = await build3mf(gcode, o, stats, thumbnail, env.profiles);
   return { gcode, project, stats, options: o };
 }

@@ -2,14 +2,16 @@
 """SCAD to STL - PC helper.
 
 Run this on the Windows PC that has Bambu Connect installed. The Android app sends a
-sliced .gcode.3mf file to it over your home network; the helper saves the file and opens
-it in Bambu Connect, where you pick the plate and press Print.
+sliced .gcode.3mf file to it over your home network; the helper saves the file, opens it in
+Bambu Connect and, if the app asks for it, presses Print and Send there (bc_autoclick.py).
 
     python scad2stl_pc_helper.py            (or double-click start-helper.bat)
 
-Needs Python 3.8 or newer, nothing else. Options:
+Needs Python 3.8 or newer; automatic clicking also needs pywinauto (start-helper.bat
+installs it). Options:
     --port 8765      port to listen on
     --dry-run        save files but do not open Bambu Connect
+    --dump-ui        write Bambu Connect's current window structure to bambu_connect_ui.txt
 """
 import argparse
 import hmac
@@ -20,6 +22,8 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -28,6 +32,8 @@ MAX_BYTES = 300 * 1024 * 1024
 HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "scad2stl_helper.json"
 SAVE_DIR = Path.home() / "Documents" / "Scad2Stl"
+AUTO_LOCK = threading.Lock()
+sys.path.insert(0, str(HERE))  # bc_autoclick.py lives next to this file
 
 
 def load_code():
@@ -64,10 +70,18 @@ def lan_addresses():
     return found or ["(could not detect; run ipconfig)"]
 
 
-def open_in_bambu_connect(path, title):
-    url = "bambu-connect://import-file?path=%s&name=%s&version=1.0.0" % (
+def import_url(path, title):
+    return "bambu-connect://import-file?path=%s&name=%s&version=1.0.0" % (
         quote(str(path), safe=""), quote(title, safe=""))
+
+
+def open_in_bambu_connect(path, title, auto=False):
+    """Hands the file to Bambu Connect. Returns True if it was already running."""
+    url = import_url(path, title)
     if sys.platform.startswith("win"):
+        if auto:
+            import bc_autoclick
+            return bc_autoclick.open_with_accessibility(url)
         os.startfile(url)  # hands the link to whatever registered bambu-connect://
     elif sys.platform == "darwin":
         subprocess.run(["open", url], check=True)
@@ -117,7 +131,9 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_BYTES:
             self.reply(413, False, "File is empty or too large")
             return
-        raw = parse_qs(url.query).get("name", ["model"])[0]
+        query = parse_qs(url.query)
+        auto = query.get("auto", ["0"])[0] == "1"
+        raw = query.get("name", ["model"])[0]
         stem = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")[:60] or "model"
         data = b""
         while len(data) < length:
@@ -140,13 +156,31 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, True, "Saved on the PC as %s (dry run, Bambu Connect not opened)." % target.name)
             return
         try:
-            open_in_bambu_connect(target, stem)
-        except (OSError, subprocess.SubprocessError) as e:
+            was_running = open_in_bambu_connect(target, stem, auto)
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
             print("Could not open Bambu Connect: %s" % e, flush=True)
             self.reply(500, False, "Saved on the PC as %s, but Bambu Connect did not open. "
                                    "Is it installed and has it been run once?" % target.name)
             return
-        self.reply(200, True, "Opened in Bambu Connect on the PC. Pick the plate and press Print there.")
+        if not auto:
+            self.reply(200, True, "Opened in Bambu Connect on the PC. Pick the plate and press Print there.")
+            return
+        import bc_autoclick
+        with AUTO_LOCK:  # one window, so one automation at a time
+            try:
+                time.sleep(6 if not was_running else 3)  # starting up / importing
+                bc_autoclick.print_imported_file(log=lambda m: print("  " + m, flush=True))
+            except bc_autoclick.AutoClickError as e:
+                print("Automatic print failed: %s" % e, flush=True)
+                self.reply(500, False, "Imported into Bambu Connect, but the automatic Print/Send "
+                                       "did not finish: %s Finish it on the PC." % e)
+                return
+            except Exception as e:  # pywinauto raises many types; report rather than crash
+                print("Automatic print failed: %r" % (e,), flush=True)
+                self.reply(500, False, "Imported into Bambu Connect, but clicking Print failed (%s). "
+                                       "Finish it on the PC." % e.__class__.__name__)
+                return
+        self.reply(200, True, "Bambu Connect pressed Print and Send. Check the printer to confirm it started.")
 
     def log_message(self, fmt, *args):
         pass  # keep the window quiet; uploads are reported above
@@ -156,7 +190,13 @@ def main():
     ap = argparse.ArgumentParser(description="SCAD to STL PC helper for Bambu Connect")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--dry-run", action="store_true", help="save files but do not open Bambu Connect")
+    ap.add_argument("--dump-ui", action="store_true", help="save Bambu Connect's window structure and exit")
     args = ap.parse_args()
+    if args.dump_ui:
+        import bc_autoclick
+        path = bc_autoclick.dump_ui()
+        print("Saved to %s" % path if path else "Could not write the file.")
+        return
 
     Handler.code = load_code()
     Handler.dry_run = args.dry_run

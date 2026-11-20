@@ -13,7 +13,7 @@
     pInfill: ["infill", 15], pWalls: ["walls", "2"], pSupport: ["support", "off"], pBrim: ["brim", false],
     pHost: ["host", ""], pCode: ["code", ""], pSerial: ["serial", ""], pSource: ["source", "loaded"],
     pLevel: ["level", true], pFormat: ["format", "project"], pAfter: ["after", "start"],
-    pPcHost: ["pcHost", ""], pPcCode: ["pcCode", ""],
+    pPcHost: ["pcHost", ""], pPcCode: ["pcCode", ""], pPcAuto: ["pcAuto", true],
   };
   const SLICE_FIELDS = ["pPrinter", "pFilament", "pPlate", "pNozzle", "pBed", "pLayer", "pInfill", "pWalls", "pSupport", "pBrim"];
 
@@ -188,15 +188,24 @@
     if (!result || busy) return;
     const cfg = pcConfig();
     if (!cfg) return;
-    busy = true; refresh();
-    pcMsg("Connecting to the PC…");
-    setTimeout(() => {
-      App.pushBytes(result.project);
-      bridge.pcSend(JSON.stringify({ ...cfg, name: safeName() }));
-    }, 30);
+    const auto = $("pPcAuto").checked;
+    const go = () => {
+      busy = true; refresh();
+      pcMsg("Connecting to the PC…");
+      setTimeout(() => {
+        App.pushBytes(result.project);
+        bridge.pcSend(JSON.stringify({ ...cfg, name: safeName(), auto }));
+      }, 30);
+    };
+    if (!auto) { go(); return; }
+    $("confirmText").textContent = "Send to Bambu Connect on " + cfg.host + " and start printing? It uses the printer, plate and " +
+      "filament Bambu Connect picks. Make sure the build plate is clear and " + result.options.filament + " is loaded.";
+    confirmAction = go;
+    $("confirm").classList.remove("hidden");
   }
   function pcNative(event, a) {
     if (event === "progress") { pcMsg("Sending… " + a + "%"); return; }
+    if (event === "status") { pcMsg(a); return; }
     busy = false;
     pcMsg(a, event === "done" ? "ok" : "err");
     refresh();

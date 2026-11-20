@@ -51,10 +51,16 @@ final class PcLink {
         }
     }
 
-    /** Uploads a .gcode.3mf; the helper opens it in Bambu Connect. Returns the helper's message. */
-    String send(File file, String name, BambuLink.Progress progress) throws IOException {
-        HttpURLConnection c = open("/print?name=" + URLEncoder.encode(name, "UTF-8"));
+    /**
+     * Uploads a .gcode.3mf; the helper opens it in Bambu Connect and, when autoPrint is set,
+     * presses Print and Send there. Returns the helper's message.
+     */
+    String send(File file, String name, boolean autoPrint, BambuLink.Progress progress) throws IOException {
+        HttpURLConnection c = open("/print?name=" + URLEncoder.encode(name, "UTF-8") + (autoPrint ? "&auto=1" : ""));
         try {
+            if (autoPrint) {
+                c.setReadTimeout(240000); // Bambu Connect may need to start, import, then be clicked through
+            }
             c.setRequestMethod("POST");
             c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/octet-stream");

@@ -33,19 +33,28 @@ card and start it from the printer's screen.
 ### Sending through a PC with Bambu Connect
 
 This route leaves the printer in its normal mode. A small helper on a Windows PC receives
-the sliced file from the phone and opens it in Bambu Connect, where you choose the plate
-and press Print (at the PC, or through remote desktop).
+the sliced file from the phone, opens it in Bambu Connect and, with "Press Print
+automatically" ticked, presses Print and then Send there for you.
 
 1. On the PC, install Bambu Connect and sign in, and install Python 3.
 2. Download `scad2stl-pc-helper.zip` from this repository's "Latest build" release, unzip
-   it, and double-click `start-helper.bat`. Allow Python on private networks if Windows asks.
+   it, and double-click `start-helper.bat` (it installs `pywinauto` the first time). Allow
+   Python on private networks if Windows asks.
 3. The helper window shows a PC address and a pairing code. Enter both under
    "Send via PC" in the app, tap **Test PC**, then **Send to PC** after slicing.
 
+Automatic printing drives Bambu Connect's window the way a person would, so the PC must be
+on and unlocked, and Bambu Connect's own choice of printer, plate type and AMS slot is used.
+Close Bambu Connect before the first automatic send so the helper can start it with
+accessibility switched on (needed to see its buttons). If a step fails, the helper saves the
+window's layout to `bambu_connect_ui.txt` and you finish on the PC; that file shows which
+button names to adjust in `bc_autoclick.py`.
+
 Files are kept in `Documents\Scad2Stl` on the PC. The helper only accepts uploads that
 carry the pairing code, and it speaks plain HTTP, so use it on your home network only.
-Whether Bambu Connect accepts a project that was not sliced by Bambu Studio or OrcaSlicer
-has not been confirmed.
+
+The `.gcode.3mf` layout follows [bambox](https://github.com/estampo/bambox), whose authors
+worked out what Bambu Connect accepts (it silently ignores files that do not match).
 
 ### Before the first print
 
@@ -94,5 +103,6 @@ With Android Studio: open this folder and press Run. Command line: `./gradlew as
 
 The app bundles OpenSCAD (GPL-2.0-or-later), CuraEngine (AGPL-3.0-or-later, via cura-wasm)
 and G-code templates from Bambu Studio (AGPL-3.0), so distribute it under the AGPL-3.0.
+The P1S settings profile in `slicer/bambu/` comes from bambox (MIT).
 Cura's printer definitions are LGPL-3.0-or-later. Liberation fonts are under the SIL Open
 Font License 1.1.

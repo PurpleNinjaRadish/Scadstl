@@ -24,7 +24,7 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk scad2stl.apk
-          (cd pc-helper && zip -r ../scad2stl-pc-helper.zip scad2stl_pc_helper.py start-helper.bat)
+          (cd pc-helper && zip -r ../scad2stl-pc-helper.zip scad2stl_pc_helper.py bc_autoclick.py start-helper.bat)
 
       - uses: actions/upload-artifact@v4
         with:
